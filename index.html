@@ -186,8 +186,8 @@ const SLCO_API  = "https://apps.saltlakecounty.gov/slcogis/rest/services/Assesso
 const DAVIS_LIR = "https://services1.arcgis.com/99lidPhWCzftIe9K/arcgis/rest/services/Parcels_Davis_LIR/FeatureServer/0/query";
 const DAVIS_OWN = "https://gisportal-pro.daviscountyutah.gov/server/rest/services/Operational/Parcels/MapServer/0/query";
 const SLC_ZONE  = "https://services1.arcgis.com/DJP723NX3ukQ2LtF/arcgis/rest/services/Salt_Lake_City_Zoning_2024/FeatureServer/6/query";
-const TIGER_TRACT = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Tracts_Blocks/MapServer/2/query";
-const TIGER_ZCTA  = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/PUMA_TAD_TAZ_UGA_ZCTA/MapServer/2/query";
+const TIGER_TRACT = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Tracts_Blocks/MapServer/0/query";
+const TIGER_ZCTA  = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/PUMA_TAD_TAZ_UGA_ZCTA/MapServer/1/query";
 
 // ── MAP ───────────────────────────────────────────────────────────────────
 const map = L.map('map',{center:[40.76,-111.89],zoom:11,preferCanvas:true,zoomControl:true});
@@ -460,33 +460,24 @@ function loadOZ(){
 
 async function loadQCT(){
   const allIDs=[...QCT_SLC,...QCT_DAVIS];
-  // Batch by county for efficiency
-  const batches=[
-    {ids:QCT_SLC, st:'49',co:'035',name:'Salt Lake'},
-    {ids:QCT_DAVIS,st:'49',co:'011',name:'Davis'}
-  ];
-  for(const {ids,st,co,name} of batches){
-    if(!ids.length) continue;
-    // Fetch all tracts for this county in one request
-    const tracts=ids.map(g=>`'${g.substring(5)}'`).join(',');
-    try{
-      const url=`${TIGER_TRACT}?where=STATE='${st}'+AND+COUNTY='${co}'+AND+TRACT+IN+(${tracts})&outFields=GEOID10,TRACT&returnGeometry=true&outSR=4326&resultRecordCount=50&f=geojson`;
-      const r=await fetch(url);
-      if(!r.ok){console.warn('QCT fetch failed',r.status);continue;}
-      const d=await r.json();
-      if(d.features&&d.features.length>0){
-        d.features.forEach(ft=>{
-          const g=ft.properties.GEOID10||ft.properties.GEOID||'';
-          const isOZ=OZ_DATA.features.some(f=>f.properties.GEOID10===g);
-          L.geoJSON(ft,{style:{color:'#3a7bd5',fillColor:'#3a7bd5',fillOpacity:.08,weight:1.5,dashArray:'3,6',opacity:.85}})
-           .bindTooltip(`<b style="color:#3a7bd5;font-family:'DM Mono',monospace">QCT — ${name} County</b><br>GEOID: ${g}${isOZ?'<br><span style=color:#c9a84c>✓ Also OZ</span>':''}`,{sticky:true})
-           .addTo(LG.qct);
-        });
-        console.log(`QCT ${name}: ${d.features.length} tracts`);
-      }
-    }catch(e){console.error('QCT error:',e);}
-    await new Promise(r=>setTimeout(r,200));
-  }
+  if(!allIDs.length) return;
+  const geoidList=allIDs.map(g=>`'${g}'`).join(',');
+  try{
+    const url=`${TIGER_TRACT}?where=GEOID+IN+(${geoidList})&outFields=GEOID,TRACT,COUNTY&returnGeometry=true&outSR=4326&resultRecordCount=100&f=geojson`;
+    const r=await fetch(url);
+    if(!r.ok){console.warn('QCT fetch failed',r.status);return;}
+    const d=await r.json();
+    if(!d.features||!d.features.length){console.warn('QCT: no features returned');return;}
+    d.features.forEach(ft=>{
+      const g=ft.properties.GEOID||'';
+      const name=ft.properties.COUNTY==='011'?'Davis':'Salt Lake';
+      const isOZ=OZ_DATA.features.some(f=>f.properties.GEOID10===g);
+      L.geoJSON(ft,{style:{color:'#3a7bd5',fillColor:'#3a7bd5',fillOpacity:.08,weight:1.5,dashArray:'3,6',opacity:.85}})
+       .bindTooltip(`<b style="color:#3a7bd5;font-family:'DM Mono',monospace">QCT — ${name} County</b><br>GEOID: ${g}${isOZ?'<br><span style=color:#c9a84c>✓ Also OZ</span>':''}`,{sticky:true})
+       .addTo(LG.qct);
+    });
+    console.log(`QCT: ${d.features.length} tracts loaded`);
+  }catch(e){console.error('QCT error:',e);}
 }
 
 async function loadDDA(){
@@ -494,13 +485,13 @@ async function loadDDA(){
   const zipList=allZips.map(z=>`'${z}'`).join(',');
   let loaded=false;
   try{
-    const url=`${TIGER_ZCTA}?where=ZCTA5CE10+IN+(${zipList})&outFields=ZCTA5CE10&returnGeometry=true&outSR=4326&f=geojson`;
+    const url=`${TIGER_ZCTA}?where=ZCTA5+IN+(${zipList})&outFields=ZCTA5&returnGeometry=true&outSR=4326&f=geojson`;
     const r=await fetch(url,{signal:AbortSignal.timeout(8000)});
     if(r.ok){
       const d=await r.json();
       if(d.features&&d.features.length>0){
         d.features.forEach(ft=>{
-          const zip=(ft.properties.ZCTA5CE10||'').toString();
+          const zip=(ft.properties.ZCTA5||'').toString();
           const isSLC=DDA_SLC.includes(zip);
           L.geoJSON(ft,{style:{color:'#9b59b6',fillColor:'#9b59b6',fillOpacity:.12,weight:1.5,dashArray:'8,4',opacity:.85}})
            .bindTooltip(`<b style="color:#9b59b6;font-family:'DM Mono',monospace">DDA Zone — ${isSLC?'Salt Lake':'Davis'}</b><br>ZIP: ${zip}<br>2026 Difficult Development Area`,{sticky:true})
